@@ -1,0 +1,15 @@
+micronaut:
+  application:
+    name: api-aggregator
+  server.port: 8081
+  http:
+    client:
+      connect-timeout: 60s
+      read-timeout: 60s
+netty:
+  default:
+    allocator:
+      max-order: 3
+jackson:
+  serialization-inclusion: always
+backend-service.url: ${BACKEND_SERVICE_URL:`http://localhost:8080`}
