@@ -24,57 +24,67 @@ class BufferingAggregatorService(
 
     private val logger = KotlinLogging.logger { }
 
-    suspend fun enqueue(pricing: Set<String>, tracking: Set<String>, shipments: Set<String>) {
-        pricingBuffer.putInRequestBuffer(pricing)
-        trackingBuffer.putInRequestBuffer(tracking)
-        shipmentBuffer.putInRequestBuffer(shipments)
+    suspend fun enqueue(uuid: UUID, pricing: Set<String>, tracking: Set<String>, shipments: Set<String>) {
+        pricingBuffer.putInRequestBuffer(uuid, pricing)
+        trackingBuffer.putInRequestBuffer(uuid, tracking)
+        shipmentBuffer.putInRequestBuffer(uuid, shipments)
         coroutineScope {
             if (pricingBuffer.size() >= 5) {
+                val pricingRequests = pricingBuffer.take(5)
                 launch {
-                    pricingBuffer.storeResponses(callAPI(pricingBuffer.take(5), aggregatorClient::pricing))
+                    pricingBuffer.storeResponses(pricingRequests, callAPI(pricingRequests, aggregatorClient::pricing))
                 }
             }
             if (shipmentBuffer.size() >= 5) {
+                val shipmentRequests = shipmentBuffer.take(5)
                 launch {
-                    shipmentBuffer.storeResponses(callAPI(shipmentBuffer.take(5), aggregatorClient::shipments))
+                    shipmentBuffer.storeResponses(
+                        shipmentRequests,
+                        callAPI(shipmentRequests, aggregatorClient::shipments)
+                    )
                 }
             }
             if (trackingBuffer.size() >= 5) {
+                val trackingRequests = trackingBuffer.take(5)
                 launch {
-                    trackingBuffer.storeResponses(callAPI(trackingBuffer.take(5), aggregatorClient::tracking))
+                    trackingBuffer.storeResponses(
+                        trackingRequests,
+                        callAPI(trackingRequests, aggregatorClient::tracking)
+                    )
                 }
             }
         }
     }
 
     private suspend fun <V : Any> callAPI(
-        ids: Set<String>,
-        apiCallFunction: suspend (Set<String>) -> Map<String, V?>?
+        ids: List<Pair<UUID, String>>,
+        apiCallFunction: suspend (List<String>) -> Map<String, V?>?
     ): Map<String, Optional<V>> {
+        val idStrings = ids.map { it.second }
         return try {
-            apiCallFunction.invoke(ids)
+            apiCallFunction.invoke(idStrings)
                 ?.mapValues { if (it.value == null) Optional.empty() else Optional.of(it.value!!) }
                 ?.also {
                     logger.info { "Backend call successful: $it" }
-                } ?: ids.associateWith { Optional.empty<V>() }
+                } ?: idStrings.associateWith { Optional.empty<V>() }
         } catch (ex: HttpClientResponseException) {
             logger.error { "Backend call failed: ${ex.message}" }
-            ids.associateWith { Optional.empty<V>() }
+            idStrings.associateWith { Optional.empty<V>() }
         }
     }
 
-    fun poll(pricing: Set<String>, tracking: Set<String>, shipments: Set<String>): AggregatorResponse {
+    fun poll(uuid: UUID, pricing: Set<String>, tracking: Set<String>, shipments: Set<String>): AggregatorResponse {
 
-        while (!pricing.all { pricingBuffer.hasResponseFor(it) } ||
-            !shipments.all { shipmentBuffer.hasResponseFor(it) } ||
-            !tracking.all { trackingBuffer.hasResponseFor(it) }) {
+        while (!pricing.all { pricingBuffer.hasResponseFor(uuid to it) } ||
+            !shipments.all { shipmentBuffer.hasResponseFor(uuid to it) } ||
+            !tracking.all { trackingBuffer.hasResponseFor(uuid to it) }) {
             Thread.sleep(500)
         }
 
         return AggregatorResponse(
-            pricing.associateWith { pricingBuffer.removeResponse(it) },
-            tracking.associateWith { trackingBuffer.removeResponse(it) },
-            shipments.associateWith { shipmentBuffer.removeResponse(it) }
+            pricing.associateWith { pricingBuffer.removeResponse(uuid to it) },
+            tracking.associateWith { trackingBuffer.removeResponse(uuid to it) },
+            shipments.associateWith { shipmentBuffer.removeResponse(uuid to it) }
         )
     }
 
@@ -84,18 +94,27 @@ class BufferingAggregatorService(
         runBlocking {
             coroutineScope {
                 if (!pricingBuffer.isEmpty() && pricingBuffer.secondsSinceLastUpdate() > 5) {
+                    val pricingRequests = pricingBuffer.take(5)
                     launch {
-                        pricingBuffer.storeResponses(callAPI(pricingBuffer.take(5), aggregatorClient::pricing))
+                        pricingBuffer.storeResponses(pricingRequests, callAPI(pricingRequests, aggregatorClient::pricing))
                     }
                 }
                 if (!shipmentBuffer.isEmpty() && shipmentBuffer.secondsSinceLastUpdate() > 5) {
+                    val shipmentRequests = shipmentBuffer.take(5)
                     launch {
-                        shipmentBuffer.storeResponses(callAPI(shipmentBuffer.take(5), aggregatorClient::shipments))
+                        shipmentBuffer.storeResponses(
+                            shipmentRequests,
+                            callAPI(shipmentRequests, aggregatorClient::shipments)
+                        )
                     }
                 }
                 if (!trackingBuffer.isEmpty() && trackingBuffer.secondsSinceLastUpdate() > 5) {
+                    val trackingRequests = trackingBuffer.take(5)
                     launch {
-                        trackingBuffer.storeResponses(callAPI(trackingBuffer.take(5), aggregatorClient::tracking))
+                        trackingBuffer.storeResponses(
+                            trackingRequests,
+                            callAPI(trackingRequests, aggregatorClient::tracking)
+                        )
                     }
                 }
             }
